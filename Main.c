@@ -15,7 +15,7 @@ HWND gGameWindow;
 GAMEBITMAP gBackBuffer;
 GAMEPERFDATA gPerformanceData;
 
-PLAYER gPlayer;
+HERO gPlayer;
 
 BOOL gWindowHasFocus;
 
@@ -50,15 +50,6 @@ int WINAPI WinMain(_In_ HINSTANCE Instance, _In_opt_ HINSTANCE PreviousInstance,
         MessageBoxA(NULL, "Couldn't load ntdll.dll!", "Error!", MB_ICONEXCLAMATION | MB_OK);
         goto Exit;
     }
-
-    #pragma warning( disable : 4191 ) //Function cast unsafe
-    if ((NtQueryTimerResolution = (_NtQueryTimerResolution)GetProcAddress(NtDllModuleHandle, "NtQueryTimerResolution")) == NULL){
-        MessageBoxA(NULL, "Couldn't find the NtQueryTimerResolution function in ntdll.dll!", "Error!", MB_ICONEXCLAMATION | MB_OK);
-        goto Exit;
-    }
-    #pragma warning( default : 4191 )
-
-    NtQueryTimerResolution(&gPerformanceData.MinimumTimerResolution, &gPerformanceData.MaximumTimerResolution, &gPerformanceData.CurrentTimerResolution);
 
     GetSystemInfo(&gPerformanceData.SystemInfo);
     GetSystemTimeAsFileTime((FILETIME*)&gPerformanceData.PreviousSystemTime);
@@ -105,8 +96,11 @@ int WINAPI WinMain(_In_ HINSTANCE Instance, _In_opt_ HINSTANCE PreviousInstance,
 
     memset(gBackBuffer.Memory, 0x7F, GAME_DRAWING_AREA_MEMORY_SIZE);
 
-    gPlayer.ScreenPosX = 25;
-    gPlayer.ScreenPosY = 25;
+    if (InitializeHero() != ERROR_SUCCESS) {
+        MessageBoxA(NULL, "Failed to initialize hero!", "Error!", MB_ICONEXCLAMATION | MB_OK);
+        goto Exit;
+    }
+
 
     //--Main Game Loop--
     gGameIsRunning = TRUE;
@@ -136,7 +130,7 @@ int WINAPI WinMain(_In_ HINSTANCE Instance, _In_opt_ HINSTANCE PreviousInstance,
         
             QueryPerformanceCounter((LARGE_INTEGER*)&FrameEnd);
         
-            if (ElapsedMicroseconds < (TARGET_MICROSECONDS_PER_FRAME - ((gPerformanceData.CurrentTimerResolution * 0.1f)) * 3.6)){
+            if (ElapsedMicroseconds < (TARGET_MICROSECONDS_PER_FRAME * 0.80f)){
                 Sleep(1);
             }
         }
@@ -346,6 +340,92 @@ void ProcessPlayerInput(void){
     DownKeyWasDown = DownKeyIsDown;
 }
 
+DWORD Load32BppBitmapFromFile(_In_ char* FileName, _Inout_ GAMEBITMAP* GameBitmap) {
+
+    DWORD Error = ERROR_SUCCESS;
+
+    HANDLE FileHandle = INVALID_HANDLE_VALUE;
+
+    WORD BitmapHeader = 0;
+    DWORD PixelDataOffset = 0;
+    DWORD NumberOfBytesRead = 0;
+
+
+    if ((FileHandle = CreateFileA(FileName, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)) == INVALID_HANDLE_VALUE) {
+        Error = GetLastError();
+        goto Exit;
+    }
+
+    if (ReadFile(FileHandle, &BitmapHeader, 2, &NumberOfBytesRead, NULL) == 0) {
+        Error = GetLastError();
+        goto Exit;
+    }
+
+    if (BitmapHeader != 0x4d42) {
+        Error = ERROR_FILE_INVALID;
+        goto Exit;
+    }
+
+    if (SetFilePointer(FileHandle, 0xA, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER) {
+        Error = GetLastError();
+        goto Exit;
+    }
+
+    if (ReadFile(FileHandle, &PixelDataOffset, sizeof(DWORD), &NumberOfBytesRead, NULL) == 0) {
+        Error = GetLastError();
+        goto Exit;
+    }
+
+    if (SetFilePointer(FileHandle, 0xE, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER) {
+        Error = GetLastError();
+        goto Exit;
+    }
+
+    if (ReadFile(FileHandle, &GameBitmap->BitmapInfo.bmiHeader, sizeof(BITMAPINFOHEADER), &NumberOfBytesRead, NULL) == 0) {
+        Error = GetLastError();
+        goto Exit;
+    }
+    //4096
+    
+    if ((GameBitmap->Memory = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, GameBitmap->BitmapInfo.bmiHeader.biSizeImage)) == NULL) {
+        Error = ERROR_NOT_ENOUGH_MEMORY;
+        goto Exit;
+    }
+
+    if (SetFilePointer(FileHandle, PixelDataOffset, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER) {
+        Error = GetLastError();
+        goto Exit;
+    }
+
+    if (ReadFile(FileHandle, GameBitmap->Memory, GameBitmap->BitmapInfo.bmiHeader.biSizeImage, &NumberOfBytesRead, NULL) == 0){
+        Error = GetLastError();
+        goto Exit;
+    }
+
+
+Exit:
+    if (FileHandle && FileHandle != INVALID_HANDLE_VALUE) {
+        CloseHandle(FileHandle);
+    }
+
+    return(Error);
+}
+
+DWORD InitializeHero(void) {
+    DWORD Error = ERROR_SUCCESS;
+
+    gPlayer.ScreenPosX = 25;
+    gPlayer.ScreenPosY = 25;
+    if ((Error = Load32BppBitmapFromFile("C:\\Users\\Glenn\\source\\repos\\CGame\\Assets\\Hero_Suit1_Down_Standing.bmpx", &gPlayer.Sprite[SUIT_0][FACING_DOWN_0])) != ERROR_SUCCESS) {
+        MessageBoxA(NULL, "", "Load32BppBitmapFromFile failed!", MB_ICONEXCLAMATION | MB_OK);
+        goto Exit;    
+    }
+
+Exit:
+    return(Error);
+
+}
+
 void RenderFrameGraphics(void) {
 
     __m128i QuadPixel = {0x7f, 0x00, 0x00, 0xff, 0x7f, 0x00, 0x00, 0xff, 0x7f, 0x00, 0x00, 0xff, 0x7f, 0x00, 0x00, 0xff};
@@ -379,18 +459,12 @@ void RenderFrameGraphics(void) {
             TextOutA(DeviceContext, 0, 0, DebugTextBuffer, (int)strlen(DebugTextBuffer));
         sprintf_s(DebugTextBuffer, _countof(DebugTextBuffer), "FPS Cooked: %.01f", gPerformanceData.CookedFPSAverage);
             TextOutA(DeviceContext, 0, 13, DebugTextBuffer, (int)strlen(DebugTextBuffer));
-        sprintf_s(DebugTextBuffer, _countof(DebugTextBuffer), "Min. Timer Res: %.02f", gPerformanceData.MinimumTimerResolution/ 10000.0f);
-            TextOutA(DeviceContext, 0, 26, DebugTextBuffer, (int)strlen(DebugTextBuffer));
-        sprintf_s(DebugTextBuffer, _countof(DebugTextBuffer), "Max  Timer Res: %.02f", gPerformanceData.MaximumTimerResolution/ 10000.0f);
-            TextOutA(DeviceContext, 0, 39, DebugTextBuffer, (int)strlen(DebugTextBuffer));
-        sprintf_s(DebugTextBuffer, _countof(DebugTextBuffer), "Cur Timer Res: %.02f", gPerformanceData.CurrentTimerResolution/ 10000.0f);
-            TextOutA(DeviceContext, 0, 52, DebugTextBuffer, (int)strlen(DebugTextBuffer));
         sprintf_s(DebugTextBuffer, _countof(DebugTextBuffer), "Handles  : %lu", gPerformanceData.HandleCount);
-            TextOutA(DeviceContext, 0, 65, DebugTextBuffer, (int)strlen(DebugTextBuffer));
+            TextOutA(DeviceContext, 0, 26, DebugTextBuffer, (int)strlen(DebugTextBuffer));
         sprintf_s(DebugTextBuffer, _countof(DebugTextBuffer), "Memory   : %llu KB", gPerformanceData.MemInfo.PrivateUsage / 1024);
-            TextOutA(DeviceContext, 0, 78, DebugTextBuffer, (int)strlen(DebugTextBuffer));
+            TextOutA(DeviceContext, 0, 39, DebugTextBuffer, (int)strlen(DebugTextBuffer));
         sprintf_s(DebugTextBuffer, _countof(DebugTextBuffer), "CPU Usage: %.02f %%", gPerformanceData.CPUPercent);
-            TextOutA(DeviceContext, 0, 91, DebugTextBuffer, (int)strlen(DebugTextBuffer));
+            TextOutA(DeviceContext, 0, 52, DebugTextBuffer, (int)strlen(DebugTextBuffer));
     }
     
 
