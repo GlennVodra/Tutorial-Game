@@ -88,6 +88,8 @@ DWORD InitializeHero(void);
 
 void RenderFrameGraphics(void);
 
+void Blit32BppBitmapToBuffer(_In_ GAMEBITMAP* GameBitmap, _In_ uint16_t x, _In_ uint16_t y);
+
 #ifdef SIMD
 void ClearScreen(_In_ __m128i* Color);
 #else 
